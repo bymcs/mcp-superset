@@ -851,7 +851,8 @@ def register_dashboard_tools(mcp):
             multi_select: Multiple selection.
             search_all_options: Search all values.
             enable_empty_filter: Empty filter = NULL.
-            cascade_parent_id: Parent filter ID (None — remove cascading).
+            cascade_parent_id: Parent filter ID to cascade from. Omit it to leave the
+                cascade unchanged; pass an empty string ("") to remove cascading.
         """
         dashboard = await client.get(f"/api/v1/dashboard/{dashboard_id}")
         result = dashboard.get("result", {})

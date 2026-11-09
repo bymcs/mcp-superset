@@ -178,6 +178,18 @@ async def test_update_with_empty_cascade_parent_removes_the_cascade(mcp_server):
     assert _sent_metadata(put)["native_filter_configuration"][1]["cascadeParentIds"] == []
 
 
+async def test_update_documents_how_to_remove_a_cascade_the_way_it_really_works(mcp_server):
+    """The docstring once said 'None — remove cascading', but omitting the argument (None) changes
+    nothing; only an empty string removes the cascade. Agents follow the published description."""
+    async with Client(mcp_server) as c:
+        tool = next(t for t in await c.list_tools() if t.name == "superset_dashboard_filter_update")
+    schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
+    description = schema["properties"]["cascade_parent_id"]["description"]
+
+    assert 'empty string ("")' in description
+    assert "None" not in description  # the old, wrong promise
+
+
 @respx.mock
 async def test_update_unknown_filter_reports_not_found_and_writes_nothing(mcp_server):
     put = _mock_dashboard()
