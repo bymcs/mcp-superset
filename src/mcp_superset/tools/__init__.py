@@ -1,6 +1,6 @@
 """Registration of all MCP server tools."""
 
-from mcp_superset.tools.annotations import install_annotations, uninstall_annotations
+from mcp_superset.tools.annotations import install_annotations, resolve_profile, uninstall_annotations
 from mcp_superset.tools.audit import register_audit_tools
 from mcp_superset.tools.charts import register_chart_tools
 from mcp_superset.tools.dashboards import register_dashboard_tools
@@ -13,13 +13,18 @@ from mcp_superset.tools.system import register_system_tools
 from mcp_superset.tools.tags import register_tag_tools
 
 
-def register_all_tools(mcp):
+def register_all_tools(mcp, profile: str | None = None):
     """Register all tool groups with the MCP server.
 
     Every tool is registered with name-derived annotations (readOnlyHint,
     destructiveHint) so clients can tell reads from writes and deletions.
+
+    Args:
+        mcp: The FastMCP server.
+        profile: ``"full"`` (default) or ``"readonly"`` (only tools that change nothing).
+            When None, ``$SUPERSET_MCP_PROFILE`` decides. An unknown value raises ValueError.
     """
-    install_annotations(mcp)
+    install_annotations(mcp, resolve_profile(profile))
     try:
         register_dashboard_tools(mcp)
         register_chart_tools(mcp)

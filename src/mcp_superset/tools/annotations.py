@@ -10,7 +10,24 @@ deliberately conservative: anything not clearly read-only is reported as a write
 anything that deletes, replaces or overwrites is reported as destructive.
 """
 
+import os
 from typing import Any
+
+# Profiles: "full" registers every tool; "readonly" registers only tools that cannot change anything.
+PROFILES = ("full", "readonly")
+PROFILE_ENV = "SUPERSET_MCP_PROFILE"
+
+# Tokens that make a tool a writer even when its name also contains a read-only token
+# (superset_dataset_get_or_create reads in its name but CREATES a dataset when it is missing).
+_WRITE_TOKENS = {"create", "update", "add", "set", "copy", "duplicate", "execute", "refresh", "publish", "grant"}
+
+# Read-only tools that the "readonly" profile still leaves out: they take a connection URI from the caller and
+# make the Superset server open an outbound connection to it, which is not something to offer a session that
+# only needs to look.
+_READONLY_PROFILE_EXCLUDED = {
+    "superset_database_test_connection",
+    "superset_database_validate_parameters",
+}
 
 # Tokens (the "_"-separated words of a tool name) that make a tool destructive.
 _DESTRUCTIVE_TOKENS = {"delete", "remove", "revoke", "reset", "replace", "stop", "import"}
@@ -56,22 +73,46 @@ def annotations_for(tool_name: str) -> dict[str, Any]:
     # openWorldHint: every tool talks to an external Superset instance.
     if tool_name in _DESTRUCTIVE_NAMES or tokens & _DESTRUCTIVE_TOKENS:
         return {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
-    if tool_name in _READ_ONLY_NAMES or tokens & _READ_ONLY_TOKENS:
+    if tool_name in _READ_ONLY_NAMES or (tokens & _READ_ONLY_TOKENS and not tokens & _WRITE_TOKENS):
         return {"readOnlyHint": True, "openWorldHint": True}
     return {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}
 
 
-def install_annotations(mcp) -> None:
+def resolve_profile(value: str | None = None) -> str:
+    """Return the active profile: ``value`` if given, else ``$SUPERSET_MCP_PROFILE``, else ``"full"``.
+
+    An unknown value raises instead of falling back: a typo must never leave someone believing the
+    writing tools are switched off while they are on.
+    """
+    raw = value if value is not None else os.environ.get(PROFILE_ENV, "")
+    profile = raw.strip().lower() or "full"
+    if profile not in PROFILES:
+        raise ValueError(f"{PROFILE_ENV}={raw!r} is not a known profile; use one of: {', '.join(PROFILES)}")
+    return profile
+
+
+def allowed_in_profile(tool_name: str, profile: str) -> bool:
+    """Whether a tool is registered under ``profile``."""
+    if profile == "full":
+        return True
+    return annotations_for(tool_name)["readOnlyHint"] and tool_name not in _READONLY_PROFILE_EXCLUDED
+
+
+def install_annotations(mcp, profile: str = "full") -> None:
     """Make every ``@mcp.tool`` registered from now on carry name-derived annotations.
 
-    Wraps ``mcp.tool`` on the instance; call ``uninstall_annotations`` when done.
-    Tools that pass their own ``annotations=`` are left alone.
+    Wraps ``mcp.tool`` on the instance; call ``uninstall_annotations`` when done. Tools that pass their
+    own ``annotations=`` are left alone. Under a restricted ``profile`` a tool that is not allowed is not
+    registered at all (the function is returned undecorated), so it can be neither listed nor called.
     """
     original = mcp.tool
 
     def tool(name_or_fn=None, **kwargs):
-        if callable(name_or_fn) and "annotations" not in kwargs:
-            kwargs["annotations"] = annotations_for(name_or_fn.__name__)
+        if callable(name_or_fn):
+            if not allowed_in_profile(name_or_fn.__name__, profile):
+                return name_or_fn
+            if "annotations" not in kwargs:
+                kwargs["annotations"] = annotations_for(name_or_fn.__name__)
         return original(name_or_fn, **kwargs)
 
     mcp.tool = tool

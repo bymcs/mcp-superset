@@ -108,7 +108,19 @@ SUPERSET_AUTH_PROVIDER=db          # db (default) or ldap
 SUPERSET_MCP_HOST=127.0.0.1       # Server host (default: 127.0.0.1)
 SUPERSET_MCP_PORT=8001             # Server port (default: 8001)
 SUPERSET_MCP_TRANSPORT=streamable-http  # streamable-http (default), sse, or stdio
+SUPERSET_MCP_PROFILE=full          # full (default) or readonly (see below)
 ```
+
+#### Read-only profile
+
+`SUPERSET_MCP_PROFILE=readonly` registers only the tools that cannot change anything (64 of 138: lists, gets, exports,
+`chart_data`, audits). Everything else (every create/update/delete, roles/RLS/grants, imports, `sqllab_execute`) is not
+registered at all, so it can be neither listed nor called, and `tools/list` is roughly half the size. Use it for sessions
+that only need to look: this server returns text written by Superset users (titles, descriptions, SQL) and can also change
+access, so text an agent reads must not be able to steer it into a writing tool. Two read tools that make the Superset
+server connect to a URI supplied by the caller (`database_test_connection`, `database_validate_parameters`) are left out
+too. An unknown value stops the server at startup instead of silently running with every tool. `GET /health` reports the
+active profile.
 
 #### Session-cookie authentication (SSO/OAuth)
 
