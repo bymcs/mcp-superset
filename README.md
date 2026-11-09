@@ -558,7 +558,7 @@ uv run mcp-superset --port 8001
 ### Running Tests
 
 ```bash
-uv run python test_all_tools.py
+uv run pytest -q
 ```
 
 ## Known Superset API Quirks

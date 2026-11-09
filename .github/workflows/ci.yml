@@ -9,9 +9,14 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    name: lint-and-test (py${{ matrix.python-version }}, fastmcp ${{ matrix.fastmcp }})
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+        # "locked" = the version pinned in uv.lock; "latest" = newest release PyPI/uvx users get.
+        # The two have differed in tool schemas and annotation field names before.
+        fastmcp: ["locked", "latest"]
 
     steps:
       - uses: actions/checkout@v7
@@ -27,18 +32,28 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
+      - name: Upgrade fastmcp to the latest release
+        if: matrix.fastmcp == 'latest'
+        run: uv pip install --upgrade fastmcp
+
+      - name: Show installed fastmcp
+        run: uv pip show fastmcp | head -3
+
       - name: Lint with ruff
-        run: uv run ruff check src/ tests/
+        if: matrix.fastmcp == 'locked'
+        run: uv run --no-sync ruff check src/ tests/
 
       - name: Check formatting with ruff
-        run: uv run ruff format --check src/ tests/
+        if: matrix.fastmcp == 'locked'
+        run: uv run --no-sync ruff format --check src/ tests/
 
       - name: Type check with mypy
-        run: uv run mypy src/mcp_superset/ --ignore-missing-imports
+        if: matrix.fastmcp == 'locked'
+        run: uv run --no-sync mypy src/mcp_superset/ --ignore-missing-imports
         continue-on-error: true
 
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run --no-sync pytest -q
 
   build:
     runs-on: ubuntu-latest

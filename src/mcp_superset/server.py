@@ -44,6 +44,7 @@ superset_client = SupersetClient(auth_manager=auth_manager, base_url=SUPERSET_BA
 # Create MCP server
 mcp = FastMCP(
     name="superset",
+    version=__version__,  # otherwise the handshake advertises fastmcp's own version
     instructions=(
         "MCP server for managing Apache Superset. "
         "Provides tools for dashboards, charts, databases, datasets, "
