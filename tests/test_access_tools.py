@@ -2,9 +2,8 @@
 grant/revoke helpers. A wrong write here silently widens or removes access, so the guards (confirm
 flags, protected roles, replace-everything warnings, Base-RLS refusal, dry-runs) are pinned.
 
-Two tests are strict ``xfail``: they document guards that FAIL OPEN when the lookup they depend on
-errors out (see the reasons). They turn into failures the day the guards are fixed, which is the cue
-to remove the marker. (``superset_rls_delete`` fails closed in the same situation, and a test says so.)
+Guards that depend on a lookup (who am I, what is this role called) fail CLOSED: if the lookup errors
+or comes back unusable, the destructive call is refused instead of going ahead unguarded.
 """
 
 import json
@@ -140,21 +139,25 @@ async def test_user_delete_removes_another_user_once_confirmed(mcp_server):
     assert delete.called and out == {"message": "OK"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FAILS OPEN: if GET /me/ errors, the service-account guard is skipped (`except Exception: pass`) "
-        "and the delete goes ahead, possibly locking out the MCP server."
-    ),
-)
 @respx.mock
-async def test_user_delete_does_not_proceed_when_it_cannot_tell_who_it_is(mcp_server):
+@pytest.mark.parametrize(
+    "me_response",
+    [
+        httpx.Response(500, json={"message": "boom"}),  # the lookup errors
+        httpx.Response(200, json={"result": {}}),  # ...or answers without saying who we are
+        httpx.Response(200, json={}),
+    ],
+    ids=["me-errors", "me-empty-result", "me-no-result"],
+)
+async def test_user_delete_does_not_proceed_when_it_cannot_tell_who_it_is(mcp_server, me_response):
+    """Deleting the service account locks out the whole MCP server, so an unverifiable identity blocks the delete."""
     _csrf()
-    respx.get(f"{API}/me/").mock(return_value=httpx.Response(500, json={"message": "boom"}))
+    respx.get(f"{API}/me/").mock(return_value=me_response)
     delete = respx.delete(f"{API}/security/users/7").mock(return_value=_ok())
 
-    await _call(mcp_server, "superset_user_delete", {"user_id": 7, "confirm_delete": True})
+    out = await _call(mcp_server, "superset_user_delete", {"user_id": 7, "confirm_delete": True})
 
+    assert "BLOCKED" in out["error"] and "service account" in out["error"]
     assert not delete.called
 
 
@@ -204,21 +207,27 @@ async def test_role_delete_needs_confirmation_then_deletes_an_ordinary_role(mcp_
     assert delete.called
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FAILS OPEN: if the role lookup errors, the name falls back to 'ID=<n>', which matches no protected "
-        "name, so a confirmed delete of e.g. Admin goes through."
-    ),
-)
 @respx.mock
-async def test_role_delete_stays_protected_when_the_role_cannot_be_looked_up(mcp_server):
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        httpx.Response(500, json={"message": "boom"}),  # the lookup errors
+        httpx.Response(404, json={"message": "not found"}),
+        httpx.Response(200, json={"result": {}}),  # ...or answers without a name
+        httpx.Response(200, json={"result": {"name": ""}}),
+    ],
+    ids=["lookup-500", "lookup-404", "no-name", "empty-name"],
+)
+@pytest.mark.parametrize("confirm", [True, False])
+async def test_role_delete_refuses_when_it_cannot_tell_which_role_this_is(mcp_server, lookup, confirm):
+    """Without the name there is no way to know it is not Admin, so nothing is deleted, confirmed or not."""
     _csrf()
-    respx.get(f"{API}/security/roles/1").mock(return_value=httpx.Response(500, json={"message": "boom"}))
+    respx.get(f"{API}/security/roles/1").mock(return_value=lookup)
     delete = respx.delete(f"{API}/security/roles/1").mock(return_value=_ok())
 
-    await _call(mcp_server, "superset_role_delete", {"role_id": 1, "confirm_delete": True})
+    out = await _call(mcp_server, "superset_role_delete", {"role_id": 1, "confirm_delete": confirm})
 
+    assert "BLOCKED" in out["error"] and "role ID=1" in out["error"]
     assert not delete.called
 
 

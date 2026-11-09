@@ -204,23 +204,37 @@ def register_security_tools(mcp):
                 ensure_ascii=False,
             )
 
-        # Guard against deleting the current service account
+        # Guard against deleting the current service account. Fails CLOSED: if we cannot tell who the
+        # server is logged in as, the delete is refused rather than risking a lock-out.
         try:
             me = await client.get("/api/v1/me/")
-            me_result = me.get("result", {})
-            if me_result.get("pk") == user_id or me_result.get("id") == user_id:
-                return json.dumps(
-                    {
-                        "error": (
-                            "BLOCKED: cannot delete the current service account "
-                            f"('{me_result.get('username', 'mcp_service')}'). "
-                            "This would lock out the entire MCP server."
-                        )
-                    },
-                    ensure_ascii=False,
-                )
-        except Exception:
-            pass
+            me_result = me.get("result") or {}
+            me_id = me_result.get("pk", me_result.get("id"))
+            me_error = None if me_id is not None else "the response did not say who this is"
+        except Exception as e:
+            me_result, me_id, me_error = {}, None, str(e)
+        if me_error:
+            return json.dumps(
+                {
+                    "error": (
+                        f"BLOCKED: could not verify that user ID={user_id} is not the current service account "
+                        f"({me_error}). Deleting the service account would lock out the entire MCP server, "
+                        "so nothing was deleted. Retry once /api/v1/me/ answers."
+                    )
+                },
+                ensure_ascii=False,
+            )
+        if me_id == user_id or me_result.get("id") == user_id:
+            return json.dumps(
+                {
+                    "error": (
+                        "BLOCKED: cannot delete the current service account "
+                        f"('{me_result.get('username', 'mcp_service')}'). "
+                        "This would lock out the entire MCP server."
+                    )
+                },
+                ensure_ascii=False,
+            )
 
         result = await client.delete(f"/api/v1/security/users/{user_id}")
         return json.dumps(result, ensure_ascii=False)
@@ -315,12 +329,24 @@ def register_security_tools(mcp):
             role_id: ID of the role to delete.
             confirm_delete: Deletion confirmation (REQUIRED).
         """
-        # Retrieve role info
+        # Retrieve role info. Fails CLOSED: without the name there is no way to know the role is not
+        # Admin (or another protected role), so an unreadable role is never deleted.
         try:
             role_info = await client.get(f"/api/v1/security/roles/{role_id}")
-            role_name = role_info.get("result", {}).get("name", "?")
-        except Exception:
-            role_name = f"ID={role_id}"
+            role_name = (role_info.get("result") or {}).get("name")
+            lookup_error = None if role_name else "the response carried no role name"
+        except Exception as e:
+            role_name, lookup_error = None, str(e)
+        if lookup_error:
+            return json.dumps(
+                {
+                    "error": (
+                        f"BLOCKED: could not determine the name of role ID={role_id} ({lookup_error}), so it "
+                        f"cannot be checked against the protected system roles. Nothing was deleted."
+                    )
+                },
+                ensure_ascii=False,
+            )
 
         # Block protected roles
         if role_name in _PROTECTED_ROLE_NAMES or any(role_name.startswith(p) for p in _PROTECTED_ROLE_PREFIXES):
