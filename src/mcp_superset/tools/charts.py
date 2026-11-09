@@ -4,7 +4,7 @@ import base64
 import json
 import re
 
-from mcp_superset.tools.helpers import auto_sync_chart_dashboards, parse_json_arg
+from mcp_superset.tools.helpers import auto_sync_chart_dashboards, overwrite_rejection, parse_json_arg
 from mcp_superset.tools.types import IntList
 
 # Moment.js date format patterns that do NOT work in Superset 6.x.
@@ -748,6 +748,7 @@ def register_chart_tools(mcp):
     async def superset_chart_import(
         file_path: str,
         overwrite: bool = False,
+        confirm_overwrite: bool = False,
     ) -> str:
         """Import charts from a ZIP file (created via export).
 
@@ -756,7 +757,10 @@ def register_chart_tools(mcp):
         Args:
             file_path: Absolute path to the ZIP file on disk.
             overwrite: Overwrite existing objects with the same UUID (default False).
+            confirm_overwrite: Overwrite confirmation (REQUIRED when overwrite=True).
         """
+        if overwrite and not confirm_overwrite:
+            return overwrite_rejection("charts")
         with open(file_path, "rb") as f:
             files = {"formData": (file_path.split("/")[-1], f, "application/zip")}
             data = {"overwrite": "true" if overwrite else "false"}

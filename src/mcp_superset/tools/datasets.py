@@ -3,7 +3,7 @@
 import base64
 import json
 
-from mcp_superset.tools.helpers import parse_json_arg
+from mcp_superset.tools.helpers import overwrite_rejection, parse_json_arg
 
 # Dataset column fields Superset accepts on PUT /dataset/{id} (read-only fields such as uuid,
 # changed_on, type_generic are deliberately absent).
@@ -400,16 +400,20 @@ def register_dataset_tools(mcp):
     async def superset_dataset_import(
         file_path: str,
         overwrite: bool = False,
+        confirm_overwrite: bool = False,
     ) -> str:
         """Import datasets from a ZIP file (created via export).
 
         Args:
             file_path: Absolute path to the ZIP file on disk.
             overwrite: Overwrite existing objects with matching UUIDs (default False).
+            confirm_overwrite: Overwrite confirmation (REQUIRED when overwrite=True).
 
         Returns:
             JSON string with the import result.
         """
+        if overwrite and not confirm_overwrite:
+            return overwrite_rejection("datasets")
         with open(file_path, "rb") as f:
             files = {"formData": (file_path.split("/")[-1], f, "application/zip")}
             data = {"overwrite": "true" if overwrite else "false"}

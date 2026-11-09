@@ -33,6 +33,28 @@ def parse_json_arg(value: str | None, field: str) -> tuple[Any, str | None]:
         return None, f"Invalid JSON in argument '{field}': {e}"
 
 
+def overwrite_rejection(kind: str) -> str:
+    """JSON error for an import called with overwrite=True but without confirm_overwrite=True.
+
+    Same contract as superset_assets_import: an overwrite replaces existing objects that share a UUID
+    with the ZIP's content and cannot be undone, so it needs an explicit second flag.
+
+    Args:
+        kind: What is being imported ("dashboards", "charts", "datasets"), used in the message.
+    """
+    return json.dumps(
+        {
+            "error": (
+                f"REJECTED: overwrite=True without confirm_overwrite=True. Importing {kind} with "
+                f"overwrite=True replaces every existing object that has the same UUID as one in the ZIP "
+                f"(including its dependencies), and this cannot be undone. "
+                f"Pass confirm_overwrite=True to confirm."
+            )
+        },
+        ensure_ascii=False,
+    )
+
+
 # Extracts the dataset id from a datasource_access view_menu name like
 # "[Database].[table_name](id:42)".
 _DATASOURCE_ID_RE = re.compile(r"\(id:(\d+)\)")

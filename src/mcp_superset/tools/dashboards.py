@@ -4,7 +4,7 @@ import base64
 import json
 import uuid
 
-from mcp_superset.tools.helpers import parse_json_arg
+from mcp_superset.tools.helpers import overwrite_rejection, parse_json_arg
 from mcp_superset.tools.types import IntList, StrList
 
 KPI_VIZ_TYPES = {"big_number_total", "big_number"}
@@ -625,6 +625,7 @@ def register_dashboard_tools(mcp):
     async def superset_dashboard_import(
         file_path: str,
         overwrite: bool = False,
+        confirm_overwrite: bool = False,
     ) -> str:
         """Import dashboards from a ZIP file (created via export).
 
@@ -633,7 +634,10 @@ def register_dashboard_tools(mcp):
         Args:
             file_path: Absolute path to the ZIP file on disk.
             overwrite: Overwrite existing objects with the same UUID (default False).
+            confirm_overwrite: Overwrite confirmation (REQUIRED when overwrite=True).
         """
+        if overwrite and not confirm_overwrite:
+            return overwrite_rejection("dashboards")
         with open(file_path, "rb") as f:
             files = {"formData": (file_path.split("/")[-1], f, "application/zip")}
             data = {"overwrite": "true" if overwrite else "false"}
@@ -680,14 +684,29 @@ def register_dashboard_tools(mcp):
         return json.dumps(result, ensure_ascii=False)
 
     @mcp.tool
-    async def superset_dashboard_embedded_delete(dashboard_id: int) -> str:
+    async def superset_dashboard_embedded_delete(
+        dashboard_id: int,
+        confirm_delete: bool = False,
+    ) -> str:
         """Disable dashboard embedding (embedded mode).
 
         After disabling, the dashboard can no longer be embedded via iframe.
 
         Args:
             dashboard_id: Dashboard ID.
+            confirm_delete: Confirmation (REQUIRED).
         """
+        if not confirm_delete:
+            return json.dumps(
+                {
+                    "error": (
+                        f"REJECTED: disabling embedding for dashboard ID={dashboard_id}. "
+                        f"Every iframe that embeds it will stop working. "
+                        f"Pass confirm_delete=True to confirm."
+                    )
+                },
+                ensure_ascii=False,
+            )
         result = await client.delete(f"/api/v1/dashboard/{dashboard_id}/embedded")
         return json.dumps(result, ensure_ascii=False)
 
