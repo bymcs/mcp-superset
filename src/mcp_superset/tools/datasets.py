@@ -5,6 +5,24 @@ import json
 
 from mcp_superset.tools.helpers import parse_json_arg
 
+# Dataset column fields Superset accepts on PUT /dataset/{id} (read-only fields such as uuid,
+# changed_on, type_generic are deliberately absent).
+_WRITABLE_COLUMN_FIELDS = (
+    "id",
+    "column_name",
+    "verbose_name",
+    "description",
+    "expression",
+    "filterable",
+    "groupby",
+    "is_active",
+    "is_dttm",
+    "python_date_format",
+    "type",
+    "advanced_data_type",
+    "extra",
+)
+
 
 def register_dataset_tools(mcp):
     from mcp_superset.server import superset_client as client
@@ -114,9 +132,9 @@ def register_dataset_tools(mcp):
             confirm_columns_replace: Confirmation for replacing ALL columns (REQUIRED when passing columns).
             always_filter_main_dttm: Force the dataset's main datetime filter on/off.
                 Superset resets this flag to false on any PUT that omits it, which
-                breaks dashboard time filters when only columns/metrics are updated.
-                Pass an explicit value to set it; leave it None and the current
-                value is preserved automatically whenever columns are replaced.
+                breaks dashboard time filters. Pass an explicit value to set it;
+                leave it None and the current value is preserved automatically
+                on every update (sql, columns, metrics, description, ...).
 
         Returns:
             JSON string with the updated dataset details.
@@ -156,19 +174,110 @@ def register_dataset_tools(mcp):
                 return json.dumps({"error": err}, ensure_ascii=False)
             payload["metrics"] = parsed
         # Superset PUT /dataset/{id} resets always_filter_main_dttm to false when
-        # the field is omitted from the payload. Replacing columns without it then
-        # silently breaks the time filters on dependent dashboards. Use the explicit
-        # value when provided; otherwise, when columns are replaced, read and
-        # preserve the current value so the flag is not clobbered.
+        # the field is omitted from the payload — for ANY update, not only when
+        # columns are replaced (a sql-only, description-only or metrics-only
+        # update clobbers it too). That silently breaks the time filters on
+        # dependent dashboards. Use the explicit value when provided; otherwise
+        # read and preserve the current value on every update.
         if always_filter_main_dttm is not None:
             payload["always_filter_main_dttm"] = always_filter_main_dttm
-        elif columns is not None:
+        else:
             current = await client.get(f"/api/v1/dataset/{dataset_id}")
             cur_val = (current.get("result") or {}).get("always_filter_main_dttm")
             if cur_val is not None:
                 payload["always_filter_main_dttm"] = cur_val
         result = await client.put(f"/api/v1/dataset/{dataset_id}", json_data=payload)
         return json.dumps(result, ensure_ascii=False)
+
+    @mcp.tool
+    async def superset_dataset_column_add(
+        dataset_id: int,
+        column_name: str,
+        verbose_name: str | None = None,
+        description: str | None = None,
+        expression: str | None = None,
+        type: str | None = None,
+        is_dttm: bool | None = None,
+        filterable: bool | None = None,
+        groupby: bool | None = None,
+        is_active: bool | None = None,
+    ) -> str:
+        """Add ONE column to a dataset, or update ONE existing column, leaving all others untouched.
+
+        Superset's PUT /dataset/{id} replaces ALL columns with the list it receives, so changing a
+        single column through dataset_update(columns=...) means rebuilding the whole list by hand.
+        This tool does that round trip for you: it reads the dataset, upserts the one column by
+        name, and writes every column back with its id, so existing verbose names, descriptions
+        and flags survive. It also preserves always_filter_main_dttm.
+
+        Typical uses: expose a column your dataset SQL now returns (keeping the other columns'
+        metadata), add a calculated column (expression), or set a column's verbose_name.
+        If the dataset SQL needs a Jinja filter and dataset_refresh_schema cannot run it
+        without a dashboard filter value, this is the way to register the new column.
+
+        Args:
+            dataset_id: Dataset ID.
+            column_name: Column to add (if absent) or update (if a column of that name exists).
+            verbose_name: Display name shown in the UI.
+            description: Column description.
+            expression: SQL expression, for a calculated column.
+            type: Column type, e.g. "STRING", "INTEGER", "TIMESTAMP".
+            is_dttm: Mark as a temporal column.
+            filterable: Allow filtering on the column.
+            groupby: Allow grouping by the column.
+            is_active: Whether the column is active.
+
+        Returns:
+            JSON with action ("added", "updated" or "unchanged"), columns_total and the update result.
+            "unchanged" means the column already exists and no field was given, so nothing was written.
+        """
+        name = column_name.strip()
+        if not name:
+            return json.dumps({"error": "column_name must not be empty."}, ensure_ascii=False)
+
+        changes = {
+            key: value
+            for key, value in {
+                "verbose_name": verbose_name,
+                "description": description,
+                "expression": expression,
+                "type": type,
+                "is_dttm": is_dttm,
+                "filterable": filterable,
+                "groupby": groupby,
+                "is_active": is_active,
+            }.items()
+            if value is not None
+        }
+
+        current = (await client.get(f"/api/v1/dataset/{dataset_id}")).get("result") or {}
+        # Write every existing column back (only the fields Superset accepts, and never explicit
+        # nulls, which some column fields reject), so the PUT replaces the list with itself + 1.
+        columns = [
+            {key: col[key] for key in _WRITABLE_COLUMN_FIELDS if col.get(key) is not None}
+            for col in current.get("columns") or []
+        ]
+
+        existing = next((col for col in columns if col.get("column_name") == name), None)
+        if existing is not None and not changes:
+            return json.dumps(
+                {"action": "unchanged", "column_name": name, "columns_total": len(columns)}, ensure_ascii=False
+            )
+        if existing is not None:
+            existing.update(changes)
+            action = "updated"
+        else:
+            columns.append({"column_name": name, **changes})
+            action = "added"
+
+        payload = {"columns": columns}
+        if current.get("always_filter_main_dttm") is not None:
+            payload["always_filter_main_dttm"] = current["always_filter_main_dttm"]
+        result = await client.put(f"/api/v1/dataset/{dataset_id}", json_data=payload)
+        return json.dumps(
+            {"action": action, "column_name": name, "columns_total": len(columns), "result": result},
+            ensure_ascii=False,
+        )
 
     @mcp.tool
     async def superset_dataset_refresh_schema(dataset_id: int) -> str:

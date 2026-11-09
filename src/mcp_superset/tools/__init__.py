@@ -1,5 +1,6 @@
 """Registration of all MCP server tools."""
 
+from mcp_superset.tools.annotations import install_annotations, uninstall_annotations
 from mcp_superset.tools.audit import register_audit_tools
 from mcp_superset.tools.charts import register_chart_tools
 from mcp_superset.tools.dashboards import register_dashboard_tools
@@ -13,14 +14,22 @@ from mcp_superset.tools.tags import register_tag_tools
 
 
 def register_all_tools(mcp):
-    """Register all tool groups with the MCP server."""
-    register_dashboard_tools(mcp)
-    register_chart_tools(mcp)
-    register_database_tools(mcp)
-    register_dataset_tools(mcp)
-    register_query_tools(mcp)
-    register_security_tools(mcp)
-    register_tag_tools(mcp)
-    register_system_tools(mcp)
-    register_group_tools(mcp)
-    register_audit_tools(mcp)
+    """Register all tool groups with the MCP server.
+
+    Every tool is registered with name-derived annotations (readOnlyHint,
+    destructiveHint) so clients can tell reads from writes and deletions.
+    """
+    install_annotations(mcp)
+    try:
+        register_dashboard_tools(mcp)
+        register_chart_tools(mcp)
+        register_database_tools(mcp)
+        register_dataset_tools(mcp)
+        register_query_tools(mcp)
+        register_security_tools(mcp)
+        register_tag_tools(mcp)
+        register_system_tools(mcp)
+        register_group_tools(mcp)
+        register_audit_tools(mcp)
+    finally:
+        uninstall_annotations(mcp)

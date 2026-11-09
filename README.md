@@ -14,22 +14,22 @@
 [![Typed](https://img.shields.io/badge/typed-py.typed-blue.svg)](https://peps.python.org/pep-0561/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Tools: 137](https://img.shields.io/badge/MCP_tools-132%2B-brightgreen.svg)](#available-tools-132)
+[![Tools: 138](https://img.shields.io/badge/MCP_tools-138-brightgreen.svg)](#available-tools-138)
 [![GitHub stars](https://img.shields.io/github/stars/bintocher/mcp-superset.svg?style=social)](https://github.com/bintocher/mcp-superset)
 
-A comprehensive [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for [Apache Superset](https://superset.apache.org/). Gives AI assistants (Claude, GPT, etc.) full control over your Superset instance — dashboards, charts, datasets, SQL Lab, users, roles, RLS, and more — through 137 tools.
+A comprehensive [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for [Apache Superset](https://superset.apache.org/). Gives AI assistants (Claude, GPT, etc.) full control over your Superset instance — dashboards, charts, datasets, SQL Lab, users, roles, RLS, and more — through 138 tools.
 
 ## Comparison with Other Superset MCP Servers
 
 | Feature | **mcp-superset** | [superset-mcp](https://github.com/aptro/superset-mcp) | [superset-mcp (Winding2020)](https://github.com/Winding2020/superset-mcp) | [superset-mcp-server](https://github.com/LiusCraft/superset-mcp-server) |
 |---------|:-:|:-:|:-:|:-:|
-| **Total tools** | **137** | 60 | 31 | 4 |
+| **Total tools** | **138** | 60 | 31 | 4 |
 | Language | Python | Python | TypeScript | TypeScript |
 | Dashboard CRUD | 15 tools | 5 | 8 | - |
 | Dashboard native filters | **5 tools** | - | - | - |
 | Chart CRUD | 11 tools | 5 | 7 | - |
 | Database tools | 18 tools | 14 | 1 | 1 |
-| Dataset tools | 11 tools | 3 | 7 | - |
+| Dataset tools | 12 tools | 3 | 7 | - |
 | SQL Lab | 5 tools | 7 | 1 | 1 |
 | **Security (users/roles)** | **26 tools** | 2 | - | - |
 | **Row Level Security** | **5 tools** | - | - | - |
@@ -62,7 +62,7 @@ A comprehensive [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
 
 ## Features
 
-- **137 MCP tools** covering the complete Superset REST API
+- **138 MCP tools** covering the complete Superset REST API
 - **Dashboard management** — CRUD, copy, publish/unpublish, export/import, embedded mode, native filters
 - **Chart management** — CRUD, copy, data retrieval, export/import, cache warmup
 - **Database management** — CRUD, connection testing, schema/table introspection, SQL validation
@@ -74,6 +74,7 @@ A comprehensive [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
 - **Tags, reports, annotations, saved queries** — full CRUD
 - **Asset export/import** — full instance backup and restore
 - **Built-in safety** — confirmation flags for destructive operations, DDL/DML blocking in SQL Lab
+- **Tool annotations** — every tool declares `readOnlyHint` / `destructiveHint`, so clients and proxies can treat reads, writes and deletions differently
 - **JWT authentication** with automatic token refresh and CSRF handling
 - **Streamable HTTP, SSE, and stdio transports**
 
@@ -238,7 +239,7 @@ Any MCP-compatible client can connect via:
 - **SSE**: `http://<host>:<port>/sse`
 - **stdio**: pipe to `mcp-superset --transport stdio`
 
-## Available Tools (137)
+## Available Tools (138)
 
 ### Dashboards (15 tools)
 
@@ -309,7 +310,7 @@ Any MCP-compatible client can connect via:
 | `superset_database_export` | Export database config as ZIP |
 | `superset_database_available_engines` | List supported database engines |
 
-### Datasets (11 tools)
+### Datasets (12 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -317,6 +318,7 @@ Any MCP-compatible client can connect via:
 | `superset_dataset_get` | Get dataset details including columns and metrics |
 | `superset_dataset_create` | Create a dataset from a table or SQL query |
 | `superset_dataset_update` | Update dataset properties |
+| `superset_dataset_column_add` | Add or update ONE column, keeping all other columns and flags intact |
 | `superset_dataset_delete` | Delete a dataset (requires confirmation) |
 | `superset_dataset_duplicate` | Duplicate a dataset |
 | `superset_dataset_refresh_schema` | Refresh columns from source |
@@ -468,8 +470,9 @@ Destructive operations require explicit confirmation parameters:
 - **Service account protection** — cannot delete the MCP service user
 - **RLS safety** — `rls_update` requires both `roles` and `tables` to prevent silent data wipe
 - **Native filter IDs** — automatically generated in `NATIVE_FILTER-<uuid>` format
-- **Chart validation** — rejects charts without `granularity_sqla` (required for dashboard time filters)
+- **Chart validation** — rejects chart params without `granularity_sqla` (required for dashboard time filters), unless the chart cannot use it: a non-temporal `viz_type`, or a dataset with no temporal column at all
 - **Auto-sync** — datasource_access permissions are automatically synchronized when dashboard roles change
+- **Tool annotations** — derived from the tool name (`tools/annotations.py`): lists/gets/exports are `readOnlyHint`; deletes, removals, revocations, resets, replacements and imports are `destructiveHint`; the rest are writes. Advisory only — the confirmation flags above remain the safeguard
 
 ## Architecture
 
@@ -494,7 +497,8 @@ superset-mcp/
         ├── dashboards.py       # Dashboard + filter tools (20)
         ├── charts.py           # Chart tools (11)
         ├── databases.py        # Database tools (18)
-        ├── datasets.py         # Dataset tools (11)
+        ├── annotations.py      # readOnlyHint / destructiveHint derived from tool names
+        ├── datasets.py         # Dataset tools (12)
         ├── queries.py          # SQL Lab + saved query tools (13)
         ├── security.py         # User, role, permission, RLS, bulk operations (26)
         ├── groups.py           # Group management tools (9)
@@ -574,6 +578,8 @@ These are handled automatically by the MCP server, but useful to know when debug
 | Dashboard copy | Requires `json_metadata` (can be `"{}"`) |
 | Native filter IDs | Must be `NATIVE_FILTER-<uuid>` format |
 | `filter_time` needs `granularity_sqla` | Charts without it silently ignore time filters |
+| Dataset PUT resets a flag | `PUT /dataset/{id}` sets `always_filter_main_dttm` to false whenever the field is omitted, on any update; the server re-sends the current value |
+| Jinja `filter_values` in `chart/data` | Superset reads the filters from `queries[0]` (as `adhoc_filters`), not from a top-level `form_data` key |
 | Number formatting | `SMART_NUMBER` abbreviates; use `,d` or `,.2f` for exact |
 
 ## License

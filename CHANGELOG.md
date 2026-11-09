@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`superset_dataset_column_add`** — add or update **one** dataset column without rebuilding the whole list. Superset's `PUT /dataset/{id}` replaces *all* columns with the list it receives, so changing a single column through `superset_dataset_update(columns=...)` meant passing every column with its id by hand. The new tool reads the dataset, upserts the one column by name, and writes every column back with its id, so existing verbose names, descriptions and flags survive; `always_filter_main_dttm` is preserved as well. Useful for exposing a column a dataset's SQL now returns (including datasets whose Jinja `filter_values` makes `superset_dataset_refresh_schema` unusable without a dashboard filter), for calculated columns (`expression`), and for setting a `verbose_name`. It is additive, so it does not need `confirm_columns_replace`.
+- **Tool annotations** — every tool now declares `readOnlyHint` / `destructiveHint` (and `openWorldHint`), derived from the tool name (`tools/annotations.py`). Previously none did, so MCP clients and proxies could not tell `superset_chart_list` from `superset_user_delete` and treated every tool as a read. Lists, gets and exports are read-only; deletes, removals, revocations, resets, replacements, imports, `superset_query_stop`, `superset_role_permission_add` and `superset_role_copy_permissions` are destructive; everything else is a write. The hints are advisory; the `confirm_*` flags remain the actual safeguard.
+
+### Fixed
+
+- **`superset_dataset_update` reset `always_filter_main_dttm` to `false`** whenever `columns` was not part of the update. Superset resets the flag on any `PUT` that omits it, but only a column replacement read and preserved the current value, so a `sql`-only, `description`-only, `metrics`-only or `table_name`-only update silently broke the time filters of dependent dashboards. The current value is now preserved on every update; passing `always_filter_main_dttm` explicitly still wins.
+- **`superset_chart_update` / `superset_chart_create` demanded `granularity_sqla` even when the chart's dataset has no temporal column at all**, so such charts could never be updated through the server (`null` was rejected too). The requirement now applies only when the dataset has a temporal column (`main_dttm_col` set or a column with `is_dttm`). When the dataset cannot be read, or the chart's `viz_type` is unknown, the previous strict behaviour is kept.
+
+### Documentation
+
+- `superset_chart_data`: filters for Jinja `filter_values('COL')` datasets must be passed as `adhoc_filters` **inside `queries[0]`** — Superset reads them from the first query, not from a top-level `form_data` key. The tool description now says so and shows the shape; the response's `applied_template_filters` lists the columns that reached the template.
+
 ## [0.3.1] - 2026-07-25
 
 ### Fixed
