@@ -968,7 +968,6 @@ def register_dashboard_tools(mcp):
             dashboard_id: Dashboard ID.
             dataset_id: Dataset ID for all filters.
             filters_json: JSON array of filter definitions. Each element:
-            confirm_reset: Filter reset confirmation (REQUIRED).
                 {
                     "name": "Full Name",
                     "column": "full_name",
@@ -978,6 +977,7 @@ def register_dashboard_tools(mcp):
                     "enable_empty_filter": false,    // optional, default false
                     "cascade_parent_id": null        // optional, parent filter ID
                 }
+            confirm_reset: Filter reset confirmation (REQUIRED).
         """
         if not confirm_reset:
             # Show current filters for an informed decision

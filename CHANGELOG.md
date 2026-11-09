@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `superset_dashboard_filter_reset`: the JSON example of a filter definition was listed under `confirm_reset` instead of `filters_json`, so the published schema described `filters_json` as "…Each element:" (cut off) and `confirm_reset`, a boolean, as a multi-line JSON blob. Visible only since the `Args:` section became schema descriptions (fastmcp ≥ 3.2.4). New registry tests fail on any parameter description that ends with `:` or on a boolean whose description carries a `{`.
 - `superset_chart_data`: filters for Jinja `filter_values('COL')` datasets must be passed as `adhoc_filters` **inside `queries[0]`** — Superset reads them from the first query, not from a top-level `form_data` key. The tool description now says so and shows the shape; the response's `applied_template_filters` lists the columns that reached the template.
 
 ## [0.3.1] - 2026-07-25

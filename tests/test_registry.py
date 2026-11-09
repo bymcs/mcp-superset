@@ -65,6 +65,34 @@ async def test_every_tool_has_a_real_description(tools):
     assert not short, f"missing or too-short descriptions: {short}"
 
 
+def _is_boolean(schema: dict) -> bool:
+    return schema.get("type") == "boolean" or any(s.get("type") == "boolean" for s in schema.get("anyOf", []))
+
+
+async def test_no_parameter_description_is_cut_off(tools):
+    """A description ending in ':' promises a continuation that went elsewhere. This happened to
+    superset_dashboard_filter_reset.filters_json, whose JSON example landed under confirm_reset."""
+    cut = {
+        f"{t.name}.{name}": schema["description"].strip()[-50:]
+        for t in tools
+        for name, schema in _input_schema(t).get("properties", {}).items()
+        if schema.get("description", "").strip().endswith(":")
+    }
+    assert not cut, f"parameter descriptions that end with ':': {cut}"
+
+
+async def test_boolean_flags_do_not_carry_json_examples(tools):
+    """confirm_* / on-off flags need one line. A '{' in a boolean's description means a neighbouring
+    parameter's example was attached to it by a misplaced docstring line."""
+    stray = [
+        f"{t.name}.{name}"
+        for t in tools
+        for name, schema in _input_schema(t).get("properties", {}).items()
+        if _is_boolean(schema) and "{" in schema.get("description", "")
+    ]
+    assert not stray, f"boolean parameters whose description contains a JSON example: {stray}"
+
+
 async def test_every_tool_takes_an_object_of_named_parameters(tools):
     bad = [t.name for t in tools if _input_schema(t).get("type") != "object"]
     assert not bad, f"inputSchema root must be an object: {bad}"
