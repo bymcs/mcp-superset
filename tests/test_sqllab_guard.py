@@ -42,13 +42,44 @@ BLOCKED = [
     ("SELECT 1; DROP TABLE t", "DROP"),  # chaining
     ("(DELETE FROM t)", "DELETE"),  # parentheses
     ("EXPLAIN ANALYZE DELETE FROM t", "DELETE"),  # EXPLAIN prefix
-    ("DO $$ BEGIN EXECUTE 'DROP TABLE t'; END $$", "DO"),  # DDL hidden in a string literal
+    # DDL hidden in a string inside a PL/pgSQL block. The $$ body stays visible to the scan, so the
+    # rejection names the DROP inside it; a block with nothing recognisable is caught by DO itself.
+    ("DO $$ BEGIN EXECUTE 'DROP TABLE t'; END $$", "DROP"),
+    ("DO $$ BEGIN PERFORM 1; END $$", "DO"),
     # --- comments and whitespace must not hide the keyword
     ("/* harmless */ DROP TABLE t", "DROP"),
     ("-- harmless\nDROP TABLE t", "DROP"),
     ("SELECT 1\n;\nDROP\nTABLE t", "DROP"),
     ("SELECT 1;\tDROP\tTABLE t", "DROP"),
     ("SELECT 1 /* x */ ; /* y */ DELETE FROM t", "DELETE"),
+    # --- a comment marker inside a quoted region must not swallow what follows it (the D9 bypass:
+    # comments used to be stripped before literals, so the guard saw only "SELECT '")
+    ("SELECT '--'; DROP TABLE t", "DROP"),
+    ("SELECT '/*'; DROP TABLE t; SELECT '*/'", "DROP"),
+    ("SELECT 'it''s --'; DROP TABLE t", "DROP"),
+    ("SELECT '-- '; DROP TABLE t", "DROP"),  # '--' followed by a space is a real comment marker
+    ('SELECT "-- "; DROP TABLE t', "DROP"),  # double-quoted identifier / MySQL string
+    ('SELECT "/*"; DROP TABLE t; SELECT "*/"', "DROP"),
+    ("SELECT `-- `; DROP TABLE t", "DROP"),  # MySQL identifier
+    ("SELECT `/*`; DROP TABLE t; SELECT `*/`", "DROP"),
+    ("SELECT [-- ]; DROP TABLE t", "DROP"),  # SQL Server identifier
+    ("SELECT [/*]; DROP TABLE t; SELECT [*/]", "DROP"),
+    ("SELECT $$-- $$; DROP TABLE t", "DROP"),  # PostgreSQL dollar quoting
+    ("SELECT $tag$/*$tag$; DROP TABLE t; SELECT '*/'", "DROP"),
+    # --- engine differences in what counts as a comment must never hide a statement
+    ("SELECT 5--1; DROP TABLE t", "DROP"),  # MySQL: '--' is a comment only before whitespace
+    ("SELECT 1 /*!50000 DROP TABLE t */", "DROP"),  # MySQL executes /*! ... */ conditional comments
+    ("SELECT 1 /*!-- x */ UPDATE t SET a = 1", "UPDATE"),  # a '-- ' inside one must not eat the closing */
+    ("SELECT 1 /*!*/ ; /*!-- */ DELETE FROM t", "DELETE"),
+    # --- backslash is NOT an escape: PostgreSQL/SQL Server read this as a closed literal followed by a
+    # DROP; MySQL would read one long literal. Flagging is the safe side of that disagreement.
+    ("SELECT '\\'; DROP TABLE t; -- '", "DROP"),
+    # --- anything unterminated is scanned as code rather than assumed to be quoted text
+    ("SELECT 'x; DROP TABLE t", "DROP"),
+    ("SELECT 1 /* ; DROP TABLE t", "DROP"),
+    # --- a quote inside a comment must not open a string that hides the next statement
+    ("SELECT 1 -- it's here\n; DROP TABLE t", "DROP"),
+    ("SELECT 1 /* it's here */; DROP TABLE t", "DROP"),
 ]
 
 ALLOWED = [
@@ -63,6 +94,15 @@ ALLOWED = [
     "SELECT 1 -- drop table t",
     "SELECT /* delete */ 1",
     "SELECT 1 /* multi\nline DROP\n*/",
+    # Comment markers that live inside quoted text are data.
+    "SELECT 'a--b' AS s, 1 -- real comment with DROP",
+    "SELECT '/*' AS a, '*/' AS b",
+    'SELECT "col-- x" FROM t',
+    "SELECT [a-- b] FROM t",
+    'SELECT "it\'s" FROM t',  # an apostrophe in a quoted identifier is not a string opener
+    "SELECT 1 -- it's a comment",
+    "SELECT 1 /* it's */ + 2",
+    "SELECT 1 --\n, 2",  # '--' directly before a line break is still a comment
 ]
 
 
@@ -74,24 +114,6 @@ def test_dangerous_statements_are_detected(sql, keyword):
 @pytest.mark.parametrize("sql", ALLOWED)
 def test_harmless_statements_are_not_flagged(sql):
     assert _detect_dangerous_sql(sql) is None
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN BYPASS: comments are stripped before string literals, so a comment marker inside a "
-        'literal swallows everything after it: the guard sees only "SELECT \'" and lets the DROP through.'
-    ),
-)
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "SELECT '--'; DROP TABLE t",
-        "SELECT '/*'; DROP TABLE t; SELECT '*/'",
-    ],
-)
-def test_comment_marker_inside_a_string_literal_must_not_hide_a_statement(sql):
-    assert _detect_dangerous_sql(sql) is not None
 
 
 # ------------------------------------------------------------ through the tool
@@ -126,7 +148,15 @@ async def _execute(mcp_server, args):
 
 
 @respx.mock
-@pytest.mark.parametrize("sql", ["DROP TABLE t", "WITH x AS (SELECT 1) DELETE FROM t", "SELECT 1; TRUNCATE t"])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DROP TABLE t",
+        "WITH x AS (SELECT 1) DELETE FROM t",
+        "SELECT 1; TRUNCATE t",
+        "SELECT '--'; DROP TABLE t",  # D9: reaches the tool, not just the helper
+    ],
+)
 async def test_rejected_sql_never_reaches_superset(mcp_server, sql):
     execute = _mock_execute()
 

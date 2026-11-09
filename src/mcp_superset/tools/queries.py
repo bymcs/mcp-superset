@@ -3,26 +3,6 @@
 import json
 import re
 
-
-def _strip_sql_comments(sql: str) -> str:
-    """Strip SQL comments (single-line -- and multi-line /* */).
-
-    Required for correct DDL/DML detection — without this, a comment before
-    a dangerous command bypasses the block: '/* */ DROP TABLE ...'
-
-    Args:
-        sql: Raw SQL string potentially containing comments.
-
-    Returns:
-        Cleaned SQL string with all comments removed.
-    """
-    # Remove multi-line comments /* ... */
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
-    # Remove single-line comments -- ...
-    sql = re.sub(r"--[^\n]*", " ", sql)
-    return sql.strip()
-
-
 # DDL/DML keywords that must never be executed via MCP. Detected as
 # WHOLE WORDS ANYWHERE in the query (not just at the start) to prevent
 # bypasses via CTE (WITH ... DELETE), statement chaining (SELECT 1; DROP ...),
@@ -47,27 +27,101 @@ _DANGEROUS_KEYWORDS = (
 )
 
 
-def _strip_sql_strings(sql: str) -> str:
-    """Remove single-quoted string literals so keywords inside them don't
-    trigger false positives (and so they can't hide a chained statement).
+# PostgreSQL dollar-quote opener: $$ or $tag$ (a tag cannot start with a digit).
+_DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 
-    Handles SQL-standard escaped quotes ('' inside a literal).
 
-    Args:
-        sql: SQL string (ideally with comments already stripped).
+def _closing_quote(sql: str, start: int, quote: str) -> int:
+    """Index of the quote that closes the one at ``start``, or -1 if it is never closed.
 
-    Returns:
-        SQL with single-quoted literals replaced by a space.
+    A doubled quote inside the region ('' or "" or a doubled backtick) is an escaped quote, not the
+    end. Backslash escapes are deliberately NOT honoured: engines disagree on them, and ignoring them
+    can only make the scanner see more code than the engine does, never less.
     """
-    return re.sub(r"'(?:''|[^'])*'", " ", sql)
+    i = start + 1
+    while i < len(sql):
+        if sql[i] == quote:
+            if sql[i + 1 : i + 2] == quote:
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _mask_sql(sql: str) -> str:
+    """Return ``sql`` with comments and single-quoted literals blanked out, in ONE left-to-right pass.
+
+    Comments and literals must be resolved together: a comment marker inside a literal is data
+    (``SELECT '--'; DROP TABLE t``), and a quote inside a comment is not the start of a literal.
+    Stripping one kind before the other lets either swallow the statement that follows it.
+
+    Rules, all chosen so that when engines disagree the scanner errs towards seeing MORE code:
+
+    * ``--`` is a comment only when followed by whitespace or the end of the text (MySQL requires the
+      space; in ``5--1`` it is arithmetic and the statement after it is real code).
+    * Single-quoted literals are blanked (a keyword inside is data).
+    * Double-quoted, backtick- and bracket-quoted identifiers, ``$tag$ ... $tag$`` bodies and MySQL
+      ``/*! ... */`` conditional comments (MySQL executes their content) are copied through unchanged:
+      their content stays visible to the keyword scan, but comment markers inside them are no longer
+      treated as comments.
+    * Anything unterminated (quote, ``/*``, ``$$``) is treated as ordinary text, so everything after
+      it is still scanned.
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "-" and sql.startswith("--", i) and (i + 2 >= n or sql[i + 2].isspace()):
+            end = sql.find("\n", i)
+            out.append(" ")
+            i = n if end == -1 else end
+            continue
+        if ch == "/" and sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            if end != -1:
+                # MySQL executes the content of /*! ... */, so keep it visible (and opaque to comment markers).
+                out.append(sql[i : end + 2] if sql.startswith("/*!", i) else " ")
+                i = end + 2
+                continue
+        elif ch == "'":
+            end = _closing_quote(sql, i, "'")
+            if end != -1:
+                out.append(" ")
+                i = end + 1
+                continue
+        elif ch in ('"', "`"):
+            end = _closing_quote(sql, i, ch)
+            if end != -1:
+                out.append(sql[i : end + 1])
+                i = end + 1
+                continue
+        elif ch == "[":
+            end = sql.find("]", i + 1)
+            if end != -1:
+                out.append(sql[i : end + 1])
+                i = end + 1
+                continue
+        elif ch == "$":
+            opener = _DOLLAR_TAG.match(sql, i)
+            if opener:
+                end = sql.find(opener.group(), opener.end())
+                if end != -1:
+                    stop = end + len(opener.group())
+                    out.append(sql[i:stop])
+                    i = stop
+                    continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _detect_dangerous_sql(sql: str) -> str | None:
     """Return the first DDL/DML keyword found in the query, or None if safe.
 
-    Strips comments and string literals first, then matches each dangerous
-    keyword as a whole word anywhere in the statement. Word boundaries keep
-    legitimate identifiers safe (e.g. update_date, deleted_at, call_datetime).
+    Masks comments and single-quoted literals first (see ``_mask_sql``), then matches each dangerous
+    keyword as a whole word anywhere in the statement. Word boundaries keep legitimate identifiers
+    safe (e.g. update_date, deleted_at, call_datetime).
 
     Args:
         sql: Raw SQL query.
@@ -75,7 +129,7 @@ def _detect_dangerous_sql(sql: str) -> str | None:
     Returns:
         The matched dangerous keyword (uppercase), or None.
     """
-    cleaned = _strip_sql_strings(_strip_sql_comments(sql)).upper()
+    cleaned = _mask_sql(sql).upper()
     for keyword in _DANGEROUS_KEYWORDS:
         if re.search(rf"\b{keyword}\b", cleaned):
             return keyword
